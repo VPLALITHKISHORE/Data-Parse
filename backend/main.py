@@ -96,227 +96,446 @@ async def save_uploaded_file(file: UploadFile, prefix: str = "") -> dict:
             "original_name": file.filename if file else "unknown"
         }
 
-def process_csv_with_validation(csv_file_path: str) -> dict:
-    """Process CSV file with comprehensive validation and data cleaning"""
+def process_csv_with_master_data(csv_file_path: str, json_file_path: str) -> dict:
+    """Process CSV file with master data integration using your exact logic"""
     start_time = time.time()
     current_timestamp = get_timestamp()
     
     try:
         print(f"[{current_timestamp}] Processing CSV: {csv_file_path}")
+        print(f"[{current_timestamp}] Processing JSON: {json_file_path}")
         
-        # Step 1: Try to detect CSV delimiter and encoding
-        delimiter = ','
-        encoding = 'utf-8'
-        
-        # Try different encodings
-        encodings_to_try = ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1']
-        df = None
-        
-        for enc in encodings_to_try:
-            try:
-                # Try different delimiters
-                delimiters_to_try = [',', ';', '\t', '|']
-                
-                for delim in delimiters_to_try:
-                    try:
-                        df_test = pd.read_csv(csv_file_path, delimiter=delim, encoding=enc, nrows=5)
-                        if len(df_test.columns) > 1:  # Valid CSV should have multiple columns
-                            delimiter = delim
-                            encoding = enc
-                            df = pd.read_csv(csv_file_path, delimiter=delimiter, encoding=encoding)
-                            print(f"[{current_timestamp}] CSV loaded with delimiter '{delimiter}' and encoding '{encoding}'")
-                            break
-                    except Exception as delim_error:
-                        continue
-                
-                if df is not None:
-                    break
-                    
-            except Exception as enc_error:
-                continue
-        
-        if df is None:
-            raise Exception("Could not read CSV file with any common delimiter or encoding")
-        
-        # Clean column names
-        df.columns = df.columns.str.strip()
-        
-        print(f"[{current_timestamp}] CSV loaded successfully: {len(df)} rows, {len(df.columns)} columns")
-        print(f"[{current_timestamp}] Columns: {df.columns.tolist()}")
-        
-        # Step 2: Data type detection and validation
-        numeric_columns = []
-        date_columns = []
-        text_columns = []
-        
-        for col in df.columns:
-            sample_values = df[col].dropna().head(100)  # Sample non-null values
-            
-            if len(sample_values) == 0:
-                text_columns.append(col)
-                continue
-            
-            # Try to detect numeric columns
-            numeric_count = 0
-            for val in sample_values:
-                try:
-                    float(str(val).replace(',', ''))  # Handle comma-separated numbers
-                    numeric_count += 1
-                except:
-                    pass
-            
-            if numeric_count / len(sample_values) > 0.7:  # 70% numeric
-                numeric_columns.append(col)
-                continue
-            
-            # Try to detect date columns
-            date_count = 0
-            for val in sample_values:
-                try:
-                    pd.to_datetime(str(val), errors='raise')
-                    date_count += 1
-                except:
-                    pass
-            
-            if date_count / len(sample_values) > 0.7:  # 70% dates
-                date_columns.append(col)
-            else:
-                text_columns.append(col)
-        
-        print(f"[{current_timestamp}] Column analysis:")
-        print(f"[{current_timestamp}] - Numeric columns: {numeric_columns}")
-        print(f"[{current_timestamp}] - Date columns: {date_columns}")
-        print(f"[{current_timestamp}] - Text columns: {text_columns}")
-        
-        # Step 3: Data cleaning and validation
-        original_row_count = len(df)
-        clean_data = []
-        error_data = []
-        validation_stats = {
-            'total_rows': original_row_count,
-            'empty_rows': 0,
-            'duplicate_rows': 0,
-            'invalid_data_rows': 0,
-            'cleaned_rows': 0,
-            'column_stats': {}
+        # Your exact constraints logic
+        CONSTRAINTS_BY_NAME = {
+            "age": {"type": "int", "min": 0, "max": 120, "nullable": False},
+            "email": {"type": "pattern", "pattern": r"^[^@]+@[^@]+\.[^@]+$", "nullable": True, "lower": True},
+            "phone": {"type": "pattern", "pattern": r"^\+?\d{7,15}$", "nullable": True},
+            "mobile": {"type": "pattern", "pattern": r"^\+?\d{7,15}$", "nullable": True},
+            "amount": {"type": "float", "min": 0, "nullable": False},
+            "price": {"type": "float", "min": 0, "nullable": False},
+            "total": {"type": "float", "min": 0, "nullable": False},
+            "date": {"type": "date", "nullable": False},
+            "dob": {"type": "date", "nullable": False},
+            "id": {"type": "non_empty", "nullable": False},
+            "name": {"type": "non_empty", "nullable": False},
+            "customer_id": {"type": "non_empty", "nullable": False},
+            "transaction_id": {"type": "non_empty", "nullable": False},
         }
         
-        # Remove completely empty rows
-        df_cleaned = df.dropna(how='all')
-        validation_stats['empty_rows'] = original_row_count - len(df_cleaned)
+        MISSING_VALUES = set(["", "na", "n/a", "null", "none", None])
+        invalid_date_count = 0
+
+        def is_missing(v):
+            if v is None:
+                return True
+            try:
+                s = str(v).strip()
+            except Exception:
+                return False
+            if s == "":
+                return True
+            return s.lower() in MISSING_VALUES
+
+        def try_parse_int(s):
+            s2 = re.sub(r"[^\d\-]", "", str(s))
+            if s2 == "" or s2 in ["-", "+"]:
+                raise ValueError("not an integer")
+            try:
+                if "." in str(s):
+                    val = int(float(s2))
+                else:
+                    val = int(s2)
+            except Exception as e:
+                raise ValueError("not an integer") from e
+            return val
+
+        def try_parse_float(s):
+            s2 = re.sub(r"[^\d\.\-]", "", str(s))
+            if s2 == "" or s2 in ["-", "+", "."]:
+                raise ValueError("not a number")
+            return float(s2)
+
+        def try_parse_date(s):
+            nonlocal invalid_date_count
+            s_str = str(s).strip()
+            allowed_formats = ["%d-%m-%Y", "%d/%m/%Y", "%m/%d/%Y", "%Y-%m-%d", "%Y/%m/%d"]
+
+            for fmt in allowed_formats:
+                try:
+                    dt = datetime.strptime(s_str, fmt)
+                    if dt.day > 31 or dt.month > 12:
+                        raise ValueError(f"Invalid day/month in date: {s_str}")
+                    return dt
+                except Exception:
+                    continue
+
+            invalid_date_count += 1
+            raise ValueError(f"invalid date format: {s_str}")
+
+        def validate_and_normalize_row(row_dict, constraints_map):
+            errors = []
+            normalized = {}
+            for col, raw in row_dict.items():
+                conf = constraints_map.get(col, {"type":"any","nullable":True})
+                ctype = conf.get("type", "any")
+                nullable = conf.get("nullable", True)
+
+                if is_missing(raw):
+                    if not nullable:
+                        errors.append(f"{col}: missing but not nullable")
+                    else:
+                        normalized[col] = None
+                    continue
+
+                s = str(raw).strip()
+                try:
+                    if ctype == "int":
+                        val = try_parse_int(s)
+                        if "min" in conf and val < conf["min"]:
+                            raise ValueError(f"{val} < min({conf['min']})")
+                        if "max" in conf and val > conf["max"]:
+                            raise ValueError(f"{val} > max({conf['max']})")
+                        normalized[col] = int(val)
+
+                    elif ctype == "float":
+                        val = try_parse_float(s)
+                        if "min" in conf and val < conf["min"]:
+                            raise ValueError(f"{val} < min({conf['min']})")
+                        if "max" in conf and val > conf["max"]:
+                            raise ValueError(f"{val} > max({conf['max']})")
+                        normalized[col] = float(val)
+
+                    elif ctype == "pattern":
+                        pattern = conf.get("pattern")
+                        value_for_check = s.lower() if conf.get("lower", False) else s
+                        if not pattern:
+                            raise ValueError("no pattern provided")
+                        if not re.fullmatch(pattern, value_for_check):
+                            raise ValueError("pattern mismatch")
+                        normalized[col] = value_for_check
+
+                    elif ctype == "date":
+                        dt = try_parse_date(s)
+                        normalized[col] = dt.strftime("%Y-%m-%d")
+
+                    elif ctype == "non_empty":
+                        if s == "":
+                            raise ValueError("empty string")
+                        normalized[col] = s
+
+                    else:
+                        normalized[col] = s
+
+                except Exception as e:
+                    errors.append(f"{col}: {str(e)}")
+
+            valid = len(errors) == 0
+            return valid, normalized, errors
+
+        # Check if files exist
+        if not os.path.exists(csv_file_path):
+            raise FileNotFoundError(f"CSV file not found: {csv_file_path}")
+        if not os.path.exists(json_file_path):
+            raise FileNotFoundError(f"JSON master file not found: {json_file_path}")
+
+        # Load master file
+        print(f"[{current_timestamp}] Loading master data...")
+        with open(json_file_path, "r", encoding="utf-8") as mf:
+            master_data = json.load(mf)
         
-        # Check for duplicates
-        duplicates = df_cleaned.duplicated()
-        validation_stats['duplicate_rows'] = duplicates.sum()
-        df_cleaned = df_cleaned[~duplicates]
+        print(f"[{current_timestamp}] Master data loaded: {len(master_data)} records")
         
-        # Process each row
-        for idx, row in df_cleaned.iterrows():
+        # Initialize processing variables
+        error_entries = []
+        stats = {
+            "total_rows_seen": 0,
+            "rows_kept": 0,
+            "rows_removed": 0,
+            "removed_reasons": {},
+            "master_records": len(master_data)
+        }
+
+        merged_data = []
+        row_global_idx = 1
+
+        # Add master data to merged_data first
+        merged_data.extend(master_data)
+        print(f"[{current_timestamp}] Added {len(master_data)} master records to output")
+
+        # Process CSV file in chunks
+        chunk_size = 5000
+        print(f"[{current_timestamp}] Processing CSV in chunks of {chunk_size}")
+        
+        try:
+            reader = pd.read_csv(csv_file_path, chunksize=chunk_size, dtype=str, keep_default_na=False, na_values=[""])
+            
+            for chunk_num, chunk in enumerate(reader):
+                print(f"[{current_timestamp}] Processing chunk {chunk_num + 1} with {len(chunk)} rows")
+                
+                # Clean column names
+                chunk.columns = [c.strip().lower().replace(" ", "_") for c in list(chunk.columns)]
+                records = chunk.to_dict(orient="records")
+
+                for local_row in records:
+                    stats["total_rows_seen"] += 1
+                    valid, normalized_row, errors = validate_and_normalize_row(local_row, CONSTRAINTS_BY_NAME)
+
+                    # Add processing metadata
+                    normalized_row["_processed_at"] = current_timestamp
+                    normalized_row["_source"] = "csv_processing"
+                    normalized_row["_row_number"] = row_global_idx
+
+                    if valid:
+                        stats["rows_kept"] += 1
+                        merged_data.append(normalized_row)
+                    else:
+                        stats["rows_removed"] += 1
+                        for e in errors:
+                            stats["removed_reasons"][e] = stats["removed_reasons"].get(e, 0) + 1
+                        
+                        # Add error record with metadata
+                        error_record = local_row.copy()
+                        error_record.update({
+                            "_processed_at": current_timestamp,
+                            "_source": "csv_processing",
+                            "_row_number": row_global_idx,
+                            "_errors": errors,
+                            "_error_count": len(errors)
+                        })
+                        
+                        error_entries.append({
+                            "row_number": row_global_idx,
+                            "errors": errors,
+                            "original_row": error_record
+                        })
+
+                    row_global_idx += 1
+                
+                print(f"[{current_timestamp}] Chunk {chunk_num + 1} completed")
+        
+        except Exception as csv_error:
+            print(f"[{current_timestamp}] Error reading CSV: {csv_error}")
+            # Try reading without chunks
+            print(f"[{current_timestamp}] Trying to read entire CSV at once...")
+            try:
+                df = pd.read_csv(csv_file_path, dtype=str, keep_default_na=False, na_values=[""])
+                df.columns = [c.strip().lower().replace(" ", "_") for c in list(df.columns)]
+                records = df.to_dict(orient="records")
+                
+                print(f"[{current_timestamp}] Processing {len(records)} records from CSV")
+                
+                for local_row in records:
+                    stats["total_rows_seen"] += 1
+                    valid, normalized_row, errors = validate_and_normalize_row(local_row, CONSTRAINTS_BY_NAME)
+
+                    # Add processing metadata
+                    normalized_row["_processed_at"] = current_timestamp
+                    normalized_row["_source"] = "csv_processing"
+                    normalized_row["_row_number"] = row_global_idx
+
+                    if valid:
+                        stats["rows_kept"] += 1
+                        merged_data.append(normalized_row)
+                    else:
+                        stats["rows_removed"] += 1
+                        for e in errors:
+                            stats["removed_reasons"][e] = stats["removed_reasons"].get(e, 0) + 1
+                        
+                        # Add error record with metadata
+                        error_record = local_row.copy()
+                        error_record.update({
+                            "_processed_at": current_timestamp,
+                            "_source": "csv_processing",
+                            "_row_number": row_global_idx,
+                            "_errors": errors,
+                            "_error_count": len(errors)
+                        })
+                        
+                        error_entries.append({
+                            "row_number": row_global_idx,
+                            "errors": errors,
+                            "original_row": error_record
+                        })
+
+                    row_global_idx += 1
+                    
+            except Exception as fallback_error:
+                raise Exception(f"Could not read CSV file with any method: {fallback_error}")
+
+        processing_time = time.time() - start_time
+        success_rate = (stats["rows_kept"] / stats["total_rows_seen"] * 100) if stats["total_rows_seen"] > 0 else 0
+        
+        print(f"[{current_timestamp}] CSV processing completed:")
+        print(f"[{current_timestamp}] - Total CSV rows: {stats['total_rows_seen']}")
+        print(f"[{current_timestamp}] - Valid rows: {stats['rows_kept']}")
+        print(f"[{current_timestamp}] - Error rows: {stats['rows_removed']}")
+        print(f"[{current_timestamp}] - Master records: {stats['master_records']}")
+        print(f"[{current_timestamp}] - Total merged records: {len(merged_data)}")
+        print(f"[{current_timestamp}] - Success rate: {success_rate:.2f}%")
+
+        return {
+            "success": True,
+            "merged_data": merged_data,
+            "error_data": [entry["original_row"] for entry in error_entries],
+            "processing_time": f"{processing_time:.2f}s",
+            "total_csv_rows": stats["total_rows_seen"],
+            "clean_count": stats["rows_kept"],
+            "error_count": stats["rows_removed"],
+            "master_records_count": stats["master_records"],
+            "total_merged_count": len(merged_data),
+            "success_rate": round(success_rate, 2),
+            "validation_stats": stats,
+            "constraints_used": CONSTRAINTS_BY_NAME,
+            "invalid_date_formats_count": invalid_date_count,
+            "file_info": {
+                "csv_file": os.path.basename(csv_file_path),
+                "master_file": os.path.basename(json_file_path)
+            }
+        }
+        
+    except Exception as e:
+        print(f"[{current_timestamp}] Error in CSV processing: {e}")
+        traceback.print_exc()
+        
+        return {
+            "success": False,
+            "error": str(e),
+            "merged_data": [],
+            "error_data": [{
+                "error": str(e),
+                "error_type": type(e).__name__,
+                "timestamp": current_timestamp
+            }],
+            "processing_time": f"{time.time() - start_time:.2f}s",
+            "success_rate": 0,
+            "total_csv_rows": 0,
+            "clean_count": 0,
+            "error_count": 1
+        }
+
+def process_csv_standalone(csv_file_path: str) -> dict:
+    """Process CSV file standalone without master data"""
+    start_time = time.time()
+    current_timestamp = get_timestamp()
+    
+    try:
+        print(f"[{current_timestamp}] Processing CSV standalone: {csv_file_path}")
+        
+        # Basic constraints for standalone processing
+        BASIC_CONSTRAINTS = {
+            "age": {"type": "int", "min": 0, "max": 120, "nullable": True},
+            "amount": {"type": "float", "min": 0, "nullable": True},
+            "price": {"type": "float", "min": 0, "nullable": True},
+            "total": {"type": "float", "min": 0, "nullable": True},
+        }
+        
+        MISSING_VALUES = set(["", "na", "n/a", "null", "none", None])
+
+        def is_missing(v):
+            if v is None:
+                return True
+            try:
+                s = str(v).strip()
+            except Exception:
+                return False
+            if s == "":
+                return True
+            return s.lower() in MISSING_VALUES
+
+        def try_parse_numeric(s, target_type="float"):
+            if target_type == "int":
+                s2 = re.sub(r"[^\d\-]", "", str(s))
+                if s2 == "" or s2 in ["-", "+"]:
+                    raise ValueError("not an integer")
+                return int(float(s2))
+            else:
+                s2 = re.sub(r"[^\d\.\-]", "", str(s))
+                if s2 == "" or s2 in ["-", "+", "."]:
+                    raise ValueError("not a number")
+                return float(s2)
+
+        # Read CSV
+        try:
+            df = pd.read_csv(csv_file_path, dtype=str, keep_default_na=False, na_values=[""])
+        except Exception as read_error:
+            raise Exception(f"Could not read CSV file: {read_error}")
+        
+        # Clean column names
+        df.columns = [c.strip().lower().replace(" ", "_") for c in list(df.columns)]
+        
+        print(f"[{current_timestamp}] CSV loaded: {len(df)} rows, {len(df.columns)} columns")
+        print(f"[{current_timestamp}] Columns: {df.columns.tolist()}")
+        
+        clean_data = []
+        error_data = []
+        stats = {"total_rows": len(df), "clean_count": 0, "error_count": 0}
+        
+        for idx, row in df.iterrows():
             try:
                 record = {}
-                row_errors = []
+                errors = []
                 
-                # Process each column based on detected type
-                for col in df.columns:
-                    original_value = row[col]
-                    
-                    if col not in validation_stats['column_stats']:
-                        validation_stats['column_stats'][col] = {
-                            'null_count': 0,
-                            'invalid_count': 0,
-                            'valid_count': 0
-                        }
-                    
-                    if pd.isna(original_value):
+                for col, val in row.items():
+                    if is_missing(val):
                         record[col] = None
-                        validation_stats['column_stats'][col]['null_count'] += 1
                         continue
                     
-                    # Handle numeric columns
-                    if col in numeric_columns:
+                    # Try to apply basic constraints
+                    if col in BASIC_CONSTRAINTS:
+                        conf = BASIC_CONSTRAINTS[col]
                         try:
-                            # Clean numeric value (remove commas, spaces, etc.)
-                            clean_num_str = str(original_value).replace(',', '').replace(' ', '').strip()
-                            
-                            if clean_num_str == '' or clean_num_str.lower() in ['n/a', 'null', 'none']:
-                                record[col] = None
-                                validation_stats['column_stats'][col]['null_count'] += 1
+                            if conf["type"] == "int":
+                                parsed_val = try_parse_numeric(val, "int")
+                                if "min" in conf and parsed_val < conf["min"]:
+                                    raise ValueError(f"Value {parsed_val} below minimum {conf['min']}")
+                                if "max" in conf and parsed_val > conf["max"]:
+                                    raise ValueError(f"Value {parsed_val} above maximum {conf['max']}")
+                                record[col] = parsed_val
+                            elif conf["type"] == "float":
+                                parsed_val = try_parse_numeric(val, "float")
+                                if "min" in conf and parsed_val < conf["min"]:
+                                    raise ValueError(f"Value {parsed_val} below minimum {conf['min']}")
+                                record[col] = parsed_val
                             else:
-                                # Try to convert to appropriate numeric type
-                                if '.' in clean_num_str or 'e' in clean_num_str.lower():
-                                    record[col] = float(clean_num_str)
-                                else:
-                                    record[col] = int(float(clean_num_str))
-                                validation_stats['column_stats'][col]['valid_count'] += 1
-                                
-                        except (ValueError, TypeError):
-                            record[col] = str(original_value).strip()
-                            row_errors.append(f"Invalid numeric value in {col}: {original_value}")
-                            validation_stats['column_stats'][col]['invalid_count'] += 1
-                    
-                    # Handle date columns
-                    elif col in date_columns:
-                        try:
-                            if str(original_value).strip() == '' or str(original_value).lower() in ['n/a', 'null', 'none']:
-                                record[col] = None
-                                validation_stats['column_stats'][col]['null_count'] += 1
-                            else:
-                                parsed_date = pd.to_datetime(original_value, errors='raise')
-                                record[col] = parsed_date.strftime('%Y-%m-%d %H:%M:%S')
-                                validation_stats['column_stats'][col]['valid_count'] += 1
-                                
-                        except (ValueError, TypeError):
-                            record[col] = str(original_value).strip()
-                            row_errors.append(f"Invalid date value in {col}: {original_value}")
-                            validation_stats['column_stats'][col]['invalid_count'] += 1
-                    
-                    # Handle text columns
+                                record[col] = str(val).strip()
+                        except Exception as parse_error:
+                            errors.append(f"{col}: {str(parse_error)}")
+                            record[col] = str(val).strip()
                     else:
-                        try:
-                            if pd.isna(original_value) or str(original_value).strip() == '':
-                                record[col] = None
-                                validation_stats['column_stats'][col]['null_count'] += 1
-                            else:
-                                record[col] = str(original_value).strip()
-                                validation_stats['column_stats'][col]['valid_count'] += 1
-                                
-                        except Exception:
-                            record[col] = None
-                            validation_stats['column_stats'][col]['null_count'] += 1
+                        # For other columns, just clean the string
+                        record[col] = str(val).strip() if not is_missing(val) else None
                 
-                # Add processing metadata
+                # Add metadata
                 record["_processed_at"] = current_timestamp
-                record["_source"] = "csv_processing"
-                record["_original_row_number"] = int(idx)
-                record["_data_quality_score"] = self._calculate_data_quality_score(record, len(df.columns))
+                record["_source"] = "csv_standalone"
+                record["_row_number"] = int(idx) + 1
                 
-                # Categorize record
-                if row_errors:
-                    record["_errors"] = row_errors
-                    record["_error_count"] = len(row_errors)
+                if errors:
+                    record["_errors"] = errors
+                    record["_error_count"] = len(errors)
                     error_data.append(record)
-                    validation_stats['invalid_data_rows'] += 1
+                    stats["error_count"] += 1
                 else:
                     clean_data.append(record)
-                    validation_stats['cleaned_rows'] += 1
+                    stats["clean_count"] += 1
                     
             except Exception as row_error:
                 error_data.append({
-                    "_original_row_number": int(idx) if not pd.isna(idx) else -1,
+                    "_row_number": int(idx) + 1,
                     "_error": str(row_error),
                     "_error_type": type(row_error).__name__,
                     "_processed_at": current_timestamp,
-                    "_source": "csv_processing"
+                    "_source": "csv_standalone"
                 })
-                validation_stats['invalid_data_rows'] += 1
+                stats["error_count"] += 1
         
         processing_time = time.time() - start_time
-        success_rate = (validation_stats['cleaned_rows'] / validation_stats['total_rows'] * 100) if validation_stats['total_rows'] > 0 else 0
+        success_rate = (stats["clean_count"] / stats["total_rows"] * 100) if stats["total_rows"] > 0 else 0
         
-        print(f"[{current_timestamp}] CSV processing completed:")
-        print(f"[{current_timestamp}] - Total rows: {validation_stats['total_rows']}")
-        print(f"[{current_timestamp}] - Cleaned rows: {validation_stats['cleaned_rows']}")
-        print(f"[{current_timestamp}] - Error rows: {validation_stats['invalid_data_rows']}")
+        print(f"[{current_timestamp}] CSV standalone processing completed:")
+        print(f"[{current_timestamp}] - Total rows: {stats['total_rows']}")
+        print(f"[{current_timestamp}] - Clean rows: {stats['clean_count']}")
+        print(f"[{current_timestamp}] - Error rows: {stats['error_count']}")
         print(f"[{current_timestamp}] - Success rate: {success_rate:.2f}%")
         
         return {
@@ -324,29 +543,19 @@ def process_csv_with_validation(csv_file_path: str) -> dict:
             "clean_data": clean_data,
             "error_data": error_data,
             "processing_time": f"{processing_time:.2f}s",
-            "total_rows": validation_stats['total_rows'],
-            "clean_count": validation_stats['cleaned_rows'],
-            "error_count": validation_stats['invalid_data_rows'],
-            "duplicate_rows_removed": validation_stats['duplicate_rows'],
-            "empty_rows_removed": validation_stats['empty_rows'],
+            "total_rows": stats["total_rows"],
+            "clean_count": stats["clean_count"],
+            "error_count": stats["error_count"],
             "success_rate": round(success_rate, 2),
             "columns_processed": df.columns.tolist(),
-            "column_types": {
-                "numeric": numeric_columns,
-                "date": date_columns,
-                "text": text_columns
-            },
-            "validation_stats": validation_stats,
             "file_info": {
-                "delimiter": delimiter,
-                "encoding": encoding,
-                "original_columns": len(df.columns),
-                "original_rows": original_row_count
+                "csv_file": os.path.basename(csv_file_path),
+                "processing_mode": "standalone"
             }
         }
         
     except Exception as e:
-        print(f"[{current_timestamp}] Error in CSV processing: {e}")
+        print(f"[{current_timestamp}] Error in CSV standalone processing: {e}")
         traceback.print_exc()
         
         return {
@@ -362,24 +571,8 @@ def process_csv_with_validation(csv_file_path: str) -> dict:
             "success_rate": 0,
             "total_rows": 0,
             "clean_count": 0,
-            "error_count": 1,
-            "columns_processed": []
+            "error_count": 1
         }
-
-def _calculate_data_quality_score(record: dict, total_columns: int) -> float:
-    """Calculate data quality score for a record"""
-    try:
-        metadata_fields = [k for k in record.keys() if k.startswith('_')]
-        actual_data_fields = total_columns - len(metadata_fields)
-        
-        non_null_count = 0
-        for key, value in record.items():
-            if not key.startswith('_') and value is not None and str(value).strip() != '':
-                non_null_count += 1
-        
-        return round((non_null_count / actual_data_fields * 100), 2) if actual_data_fields > 0 else 0
-    except:
-        return 0.0
 
 def process_pdf_with_validation(pdf_file_path: str) -> dict:
     """Process PDF using multiple extraction methods with OCR fallback for image-based PDFs"""
@@ -1321,15 +1514,27 @@ def save_processing_results(file_id: str, results: Dict[str, Any], file_types: D
         if 'csv_results' in results and results['csv_results']['success']:
             csv_results = results['csv_results']
             
-            # Save clean CSV data
-            clean_csv_file = output_dir / "clean_csv_data.json"
-            with open(clean_csv_file, 'w', encoding='utf-8') as f:
-                json.dump(csv_results["clean_data"], f, indent=2, ensure_ascii=False, default=str)
-            
-            # Save CSV errors
-            error_csv_file = output_dir / "csv_errors.json"
-            with open(error_csv_file, 'w', encoding='utf-8') as f:
-                json.dump(csv_results["error_data"], f, indent=2, ensure_ascii=False, default=str)
+            # For CSV with master data (merged data)
+            if 'merged_data' in csv_results:
+                # Save merged data (master + clean CSV)
+                merged_csv_file = output_dir / "merged_csv_master_data.json"
+                with open(merged_csv_file, 'w', encoding='utf-8') as f:
+                    json.dump(csv_results["merged_data"], f, indent=2, ensure_ascii=False, default=str)
+                
+                # Save CSV errors
+                error_csv_file = output_dir / "csv_errors.json"
+                with open(error_csv_file, 'w', encoding='utf-8') as f:
+                    json.dump(csv_results["error_data"], f, indent=2, ensure_ascii=False, default=str)
+            else:
+                # For standalone CSV processing
+                clean_csv_file = output_dir / "clean_csv_data.json"
+                with open(clean_csv_file, 'w', encoding='utf-8') as f:
+                    json.dump(csv_results["clean_data"], f, indent=2, ensure_ascii=False, default=str)
+                
+                # Save CSV errors
+                error_csv_file = output_dir / "csv_errors.json"
+                with open(error_csv_file, 'w', encoding='utf-8') as f:
+                    json.dump(csv_results["error_data"], f, indent=2, ensure_ascii=False, default=str)
         
         # Save combined summary
         summary_file = output_dir / f"{file_id}_processing_summary.json"
@@ -1356,7 +1561,7 @@ def save_processing_results(file_id: str, results: Dict[str, Any], file_types: D
                 "pdf_errors": str(output_dir / "pdf_errors.json")
             } if 'pdf_results' in results else None,
             "csv_files": {
-                "clean_csv_data": str(output_dir / "clean_csv_data.json"),
+                "merged_csv_master_data": str(output_dir / "merged_csv_master_data.json") if 'csv_results' in results and 'merged_data' in results['csv_results'] else str(output_dir / "clean_csv_data.json"),
                 "csv_errors": str(output_dir / "csv_errors.json")
             } if 'csv_results' in results else None
         }
@@ -1446,10 +1651,18 @@ async def upload_multi_files(
             results['excel_results'] = excel_results
             print(f"[{current_timestamp}] Excel processing completed")
         
-        # Process CSV if available
+        # Process CSV - with or without master data
         if csv_file:
-            print(f"[{current_timestamp}] Processing CSV with validation...")
-            csv_results = process_csv_with_validation(saved_files['csv']['saved_path'])
+            if json_file:
+                print(f"[{current_timestamp}] Processing CSV with Master Data integration...")
+                csv_results = process_csv_with_master_data(
+                    saved_files['csv']['saved_path'],
+                    saved_files['json']['saved_path']
+                )
+            else:
+                print(f"[{current_timestamp}] Processing CSV standalone...")
+                csv_results = process_csv_standalone(saved_files['csv']['saved_path'])
+            
             results['csv_results'] = csv_results
             print(f"[{current_timestamp}] CSV processing completed")
         
