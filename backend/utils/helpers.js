@@ -1,4 +1,4 @@
-// src/utils/helpers.js - Complete version with all missing functions
+// utils/helpers.js
 export const dateUtils = {
   formatDateTime: (dateString) => {
     if (!dateString) return 'N/A';
@@ -72,7 +72,6 @@ export const colorUtils = {
     return colors[errorType] || '#6c757d';
   },
 
-  // Add the missing getDatabaseColor function
   getDatabaseColor: (database) => {
     const colors = {
       'CREDIT_DATA': '#007bff',
@@ -80,25 +79,5 @@ export const colorUtils = {
       'UPI_EXCEL': '#6f42c1'
     };
     return colors[database] || '#6c757d';
-  },
-
-  getSourceFormatColor: (sourceFormat) => {
-    const colors = {
-      'CSV': '#28a745',
-      'Excel': '#6f42c1', 
-      'XML': '#dc3545',
-      'JSON': '#17a2b8',
-      'PDF': '#fd7e14'
-    };
-    return colors[sourceFormat] || '#6c757d';
-  },
-
-  getStatusColor: (status) => {
-    const colors = {
-      'UNRESOLVED': '#ef4444',
-      'RESOLVED': '#22c55e',
-      'IGNORED': '#6b7280'
-    };
-    return colors[status] || '#6b7280';
   }
 };

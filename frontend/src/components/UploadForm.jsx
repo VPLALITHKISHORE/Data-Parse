@@ -1,985 +1,901 @@
-import React, { useState, useCallback } from 'react';
-import { useDropzone } from 'react-dropzone';
-import { Upload, FileText, AlertCircle, CheckCircle, X, Database, Trash2, Loader, FileSpreadsheet, TrendingDown, TrendingUp, BarChart3, FileImage } from 'lucide-react';
+// ErrorLogs.jsx - Complete updated component
+import React, { useState, useEffect } from 'react';
+import { 
+  ChevronLeft, ChevronRight, Search, Filter, 
+  Download, RefreshCw, Eye, AlertCircle, CheckCircle,
+  XCircle, Clock, User, BarChart3, Database, FileText,
+  TrendingUp, Activity
+} from 'lucide-react';
+import { errorsAPI, downloadAPI, handleFileDownload } from '../services/api';
+import { dateUtils, numberUtils, colorUtils } from '../utils/helpers';
 import toast from 'react-hot-toast';
 
-const UploadForm = () => {
-  const [selectedFiles, setSelectedFiles] = useState([]);
-  const [uploading, setUploading] = useState(false);
-  const [uploadResult, setUploadResult] = useState(null);
-  const [fileCounter, setFileCounter] = useState(0);
-
-  // Handle file drop for multiple files
-  const onDrop = useCallback((acceptedFiles) => {
-    const newFiles = acceptedFiles.map(file => {
-      // Determine file type based on extension
-      const extension = file.name.toLowerCase().split('.').pop();
-      let fileType = 'unknown';
-      
-      if (extension === 'xml') fileType = 'xml';
-      else if (extension === 'json') fileType = 'json';
-      else if (['xlsx', 'xls'].includes(extension)) fileType = 'excel';
-      else if (extension === 'pdf') fileType = 'pdf';
-      else if (extension === 'csv') fileType = 'csv';
-
-      return {
-        id: fileCounter + Math.random(),
-        file: file,
-        name: file.name,
-        size: file.size,
-        type: file.type,
-        fileType: fileType,
-        addedAt: new Date().toLocaleTimeString()
-      };
-    });
-
-    // Check for duplicates and file type limits
-    const currentFileTypes = selectedFiles.map(f => f.fileType);
-    const filteredNewFiles = [];
-
-    newFiles.forEach(newFile => {
-      if (currentFileTypes.includes(newFile.fileType)) {
-        // Replace existing file of the same type
-        setSelectedFiles(prev => prev.filter(f => f.fileType !== newFile.fileType));
-        toast.success(`${newFile.fileType.toUpperCase()} file replaced with ${newFile.name}`);
-      } else {
-        toast.success(`${newFile.fileType.toUpperCase()} file ${newFile.name} added successfully!`);
-      }
-      filteredNewFiles.push(newFile);
-    });
-
-    setSelectedFiles(prev => [...prev.filter(f => !filteredNewFiles.some(nf => nf.fileType === f.fileType)), ...filteredNewFiles]);
-    setFileCounter(prev => prev + filteredNewFiles.length);
-  }, [selectedFiles, fileCounter]);
-
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({
-    onDrop,
-    accept: {
-      'text/xml': ['.xml'],
-      'application/xml': ['.xml'],
-      'application/json': ['.json'],
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'],
-      'application/vnd.ms-excel': ['.xls'],
-      'application/pdf': ['.pdf'],
-      'text/csv': ['.csv'],
-      'application/csv': ['.csv']
-    },
-    multiple: true,
-    disabled: uploading
+const ErrorLogs = () => {
+  const [data, setData] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [stats, setStats] = useState(null);
+  const [dbStatus, setDbStatus] = useState(null);
+  const [selectedCustomer, setSelectedCustomer] = useState('');
+  const [customerErrors, setCustomerErrors] = useState([]);
+  const [showCustomerView, setShowCustomerView] = useState(false);
+  
+  const [pagination, setPagination] = useState({
+    currentPage: 1,
+    totalPages: 1,
+    totalRecords: 0,
+    recordsPerPage: 10
   });
+  
+  const [filters, setFilters] = useState({
+    search: '',
+    errorType: '',
+    sourceFormat: '',
+    database: '',
+    customerId: '',
+    startDate: '',
+    endDate: '',
+    sortBy: 'createdAt',
+    sortOrder: 'desc'
+  });
+  
+  const [downloading, setDownloading] = useState(false);
+  const [selectedError, setSelectedError] = useState(null);
+  const [showFilters, setShowFilters] = useState(false);
+  const [updatingStatus, setUpdatingStatus] = useState(null);
 
-  // Format file size
-  const formatFileSize = (bytes) => {
-    if (bytes === 0) return '0 Bytes';
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-  };
-
-  // Get file type icon and color
-  const getFileIcon = (fileType) => {
-    switch (fileType) {
-      case 'xml':
-        return { icon: FileText, color: 'text-orange-500', bg: 'bg-orange-50', border: 'border-orange-200' };
-      case 'json':
-        return { icon: Database, color: 'text-blue-500', bg: 'bg-blue-50', border: 'border-blue-200' };
-      case 'excel':
-        return { icon: FileSpreadsheet, color: 'text-green-500', bg: 'bg-green-50', border: 'border-green-200' };
-      case 'pdf':
-        return { icon: FileImage, color: 'text-red-500', bg: 'bg-red-50', border: 'border-red-200' };
-      case 'csv':
-        return { icon: BarChart3, color: 'text-purple-500', bg: 'bg-purple-50', border: 'border-purple-200' };
-      default:
-        return { icon: FileText, color: 'text-gray-500', bg: 'bg-gray-50', border: 'border-gray-200' };
-    }
-  };
-
-  // Calculate metrics for XML processing
-  const calculateXMLMetrics = (xmlResults) => {
-    if (!xmlResults || !xmlResults.success) return null;
-
-    const xmlCustomers = xmlResults.xml_customers || 0;
-    const masterCustomers = xmlResults.master_customers || 0;
-    const cleanedRecords = xmlResults.cleaned_data?.length || 0;
-
-    const xmlSuccessRate = xmlCustomers > 0 ? (cleanedRecords / xmlCustomers * 100) : 0;
-    const missingFromXmlCount = masterCustomers - xmlCustomers;
-    const missingRate = masterCustomers > 0 ? (missingFromXmlCount / masterCustomers * 100) : 0;
-    const coverageRate = masterCustomers > 0 ? (xmlCustomers / masterCustomers * 100) : 0;
-
-    return {
-      xmlSuccessRate: Math.round(xmlSuccessRate * 100) / 100,
-      missingRate: Math.round(missingRate * 100) / 100,
-      coverageRate: Math.round(coverageRate * 100) / 100,
-      missingFromXmlCount
-    };
-  };
-
-  // Calculate metrics for Excel processing
-  const calculateExcelMetrics = (excelResults) => {
-    if (!excelResults || !excelResults.success) return null;
-
-    const totalRows = excelResults.total_rows || 0;
-    const cleanRows = excelResults.clean_count || 0;
-    const errorRows = excelResults.error_count || 0;
-    const successRate = excelResults.success_rate || 0;
-
-    return {
-      totalRows,
-      cleanRows,
-      errorRows,
-      successRate,
-      errorInfo: excelResults.error_info || {}
-    };
-  };
-
-  // Calculate metrics for PDF processing
-  const calculatePDFMetrics = (pdfResults) => {
-    if (!pdfResults || !pdfResults.success) return null;
-
-    const totalPdfRows = pdfResults.total_pdf_rows || 0;
-    const processedRows = pdfResults.processed_count || pdfResults.processed_data?.length || 0;
-    const errorRows = pdfResults.error_count || pdfResults.error_data?.length || 0;
-    const successRate = pdfResults.success_rate || 0;
-
-    return {
-      totalPdfRows,
-      processedRows,
-      errorRows,
-      successRate,
-      tablesFound: pdfResults.tables_found || 0,
-      columnsExtracted: pdfResults.columns_extracted || [],
-      extractionMethod: pdfResults.extraction_method || 'unknown'
-    };
-  };
-
-  // Calculate metrics for CSV processing
-  const calculateCSVMetrics = (csvResults) => {
-    if (!csvResults || !csvResults.success) return null;
-
-    const totalRows = csvResults.total_rows || 0;
-    const cleanRows = csvResults.clean_count || 0;
-    const errorRows = csvResults.error_count || 0;
-    const successRate = csvResults.success_rate || 0;
-    const duplicatesRemoved = csvResults.duplicate_rows_removed || 0;
-    const emptyRowsRemoved = csvResults.empty_rows_removed || 0;
-
-    return {
-      totalRows,
-      cleanRows,
-      errorRows,
-      successRate,
-      duplicatesRemoved,
-      emptyRowsRemoved,
-      columnTypes: csvResults.column_types || {},
-      fileInfo: csvResults.file_info || {},
-      validationStats: csvResults.validation_stats || {}
-    };
-  };
-
-  // Upload files to backend
-  const uploadFiles = async () => {
-    if (selectedFiles.length === 0) {
-      toast.error('Please select at least one file (XML, JSON, Excel, PDF, or CSV)');
-      return;
-    }
-
-    // Check for valid combinations - Updated validation logic
-    const fileTypes = selectedFiles.map(f => f.fileType);
-    const hasXML = fileTypes.includes('xml');
-    const hasJSON = fileTypes.includes('json');
-    const hasExcel = fileTypes.includes('excel');
-    const hasPDF = fileTypes.includes('pdf');
-    const hasCSV = fileTypes.includes('csv');
-
-    // Only XML requires JSON, PDF and CSV are standalone now
-    if (hasXML && !hasJSON) {
-      toast.error('XML files require JSON master data file for processing');
-      return;
-    }
-
-    setUploading(true);
-    
+  // Fetch error logs
+  const fetchErrors = async (page = 1) => {
+    setLoading(true);
     try {
-      const formData = new FormData();
-      selectedFiles.forEach(fileItem => {
-        formData.append('files', fileItem.file);
-      });
+      const params = {
+        page,
+        limit: pagination.recordsPerPage,
+        ...filters
+      };
 
-      toast.loading('Processing files...', { id: 'processing' });
-
-      const response = await fetch('http://localhost:8000/upload/multi-files', {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || errorData.message || 'Upload failed');
+      const response = await errorsAPI.getErrors(params);
+      setData(response.data || []);
+      setPagination(response.pagination || {});
+      
+      if (response.summary) {
+        console.log('API Summary:', response.summary);
       }
+    } catch (error) {
+      console.error('Error fetching error logs:', error);
+      toast.error('Failed to fetch error logs');
+      setData([]);
+    } finally {
+      setLoading(false);
+    }
+  };
 
-      const result = await response.json();
-      setUploadResult(result);
+  // Fetch statistics
+  const fetchStats = async () => {
+    try {
+      const statsData = await errorsAPI.getErrorStats();
+      setStats(statsData);
+    } catch (error) {
+      console.error('Error fetching stats:', error);
+      toast.error('Failed to fetch statistics');
+    }
+  };
+
+  // Fetch database status
+  const fetchDbStatus = async () => {
+    try {
+      const statusData = await errorsAPI.getDatabaseStatus();
+      setDbStatus(statusData);
+    } catch (error) {
+      console.error('Error fetching database status:', error);
+    }
+  };
+
+  // Fetch customer-specific errors
+  const fetchCustomerErrors = async (customerId) => {
+    if (!customerId.trim()) {
+      toast.error('Please enter a customer ID');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const response = await errorsAPI.getCustomerErrors(customerId);
+      setCustomerErrors(response.errors || []);
+      setSelectedCustomer(customerId);
+      setShowCustomerView(true);
+      
+      toast.success(`Found ${response.totalErrors} errors for customer ${customerId}`);
+    } catch (error) {
+      console.error('Error fetching customer errors:', error);
+      toast.error('Failed to fetch customer errors');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchErrors();
+    fetchStats();
+    fetchDbStatus();
+  }, [filters, pagination.recordsPerPage]);
+
+  // Handle filter changes
+  const handleFilterChange = (field, value) => {
+    setFilters(prev => ({
+      ...prev,
+      [field]: value
+    }));
+  };
+
+  // Handle customer search
+  const handleCustomerSearch = () => {
+    if (filters.customerId.trim()) {
+      fetchCustomerErrors(filters.customerId.trim());
+    } else {
+      toast.error('Please enter a customer ID');
+    }
+  };
+
+  // Handle pagination
+  const handlePageChange = (page) => {
+    fetchErrors(page);
+  };
+
+  // Handle download
+  const handleDownload = async (format) => {
+    setDownloading(true);
+    try {
+      const params = {
+        format,
+        ...filters,
+        filename: `error_logs_${dateUtils.formatDate(new Date(), 'yyyy-MM-dd')}`
+      };
+
+      const response = await downloadAPI.downloadErrors(params);
+      const result = handleFileDownload(response, `errors.${format}`);
       
       if (result.success) {
-        let successMessage = 'Processing completed successfully! ';
-        
-        if (result.results?.xml_results) {
-          const xmlMetrics = calculateXMLMetrics(result.results.xml_results);
-          successMessage += `XML: ${result.results.xml_results.cleaned_data?.length || 0} cleaned records. `;
-        }
-        
-        if (result.results?.excel_results) {
-          const excelMetrics = calculateExcelMetrics(result.results.excel_results);
-          successMessage += `Excel: ${excelMetrics.cleanRows} clean records from ${excelMetrics.totalRows} total. `;
-        }
-
-        if (result.results?.pdf_results) {
-          const pdfMetrics = calculatePDFMetrics(result.results.pdf_results);
-          successMessage += `PDF: ${pdfMetrics.processedRows} processed records from ${pdfMetrics.totalPdfRows} total. `;
-        }
-
-        if (result.results?.csv_results) {
-          const csvMetrics = calculateCSVMetrics(result.results.csv_results);
-          successMessage += `CSV: ${csvMetrics.cleanRows} clean records from ${csvMetrics.totalRows} total.`;
-        }
-
-        toast.success(successMessage, { id: 'processing' });
+        toast.success(`Downloaded ${result.filename}`);
       } else {
-        toast.error(`Processing failed: ${result.error}`, { id: 'processing' });
+        toast.error('Download failed');
       }
-
     } catch (error) {
-      console.error('Upload error:', error);
-      toast.error(`Failed to process files: ${error.message}`, { id: 'processing' });
-      setUploadResult({
-        success: false,
-        error: error.message
-      });
+      console.error('Download error:', error);
+      toast.error('Failed to download data');
     } finally {
-      setUploading(false);
+      setDownloading(false);
     }
   };
 
-  // Remove specific file
-  const removeFile = (fileId) => {
-    const fileToRemove = selectedFiles.find(f => f.id === fileId);
-    setSelectedFiles(prev => prev.filter(f => f.id !== fileId));
-    if (fileToRemove) {
-      toast.success(`${fileToRemove.fileType.toUpperCase()} file removed`);
+  // Handle status update
+  const handleStatusUpdate = async (errorId, newStatus, resolutionNotes = '') => {
+    setUpdatingStatus(errorId);
+    try {
+      await errorsAPI.updateErrorStatus(
+        errorId, 
+        newStatus, 
+        'System User', 
+        resolutionNotes
+      );
+      
+      toast.success('Status updated successfully');
+      if (showCustomerView) {
+        fetchCustomerErrors(selectedCustomer);
+      } else {
+        fetchErrors(pagination.currentPage);
+      }
+      setSelectedError(null);
+    } catch (error) {
+      console.error('Error updating status:', error);
+      toast.error('Failed to update status');
+    } finally {
+      setUpdatingStatus(null);
     }
   };
 
-  // Clear all files
-  const clearAll = () => {
-    setSelectedFiles([]);
-    setUploadResult(null);
-    toast.success('All files cleared');
+  // Handle sort
+  const handleSort = (field) => {
+    const newOrder = filters.sortBy === field && filters.sortOrder === 'asc' ? 'desc' : 'asc';
+    setFilters(prev => ({
+      ...prev,
+      sortBy: field,
+      sortOrder: newOrder
+    }));
+  };
+
+  // Clear filters
+  const clearFilters = () => {
+    setFilters({
+      search: '',
+      errorType: '',
+      sourceFormat: '',
+      database: '',
+      customerId: '',
+      startDate: '',
+      endDate: '',
+      sortBy: 'createdAt',
+      sortOrder: 'desc'
+    });
+    setShowCustomerView(false);
+    setCustomerErrors([]);
+    setSelectedCustomer('');
+  };
+
+  // Get status icon
+  const getStatusIcon = (status) => {
+    switch (status) {
+      case 'RESOLVED':
+        return <CheckCircle className="h-4 w-4 text-green-500" />;
+      case 'IGNORED':
+        return <XCircle className="h-4 w-4 text-gray-500" />;
+      default:
+        return <Clock className="h-4 w-4 text-yellow-500" />;
+    }
+  };
+
+  // Get error type color
+  const getErrorTypeColor = (errorType) => {
+    return colorUtils.getErrorTypeColor(errorType);
   };
 
   return (
     <div className="max-w-7xl mx-auto p-6">
-      <div className="bg-white rounded-lg shadow-sm border">
-        <div className="p-6 border-b">
-          <h2 className="text-2xl font-semibold text-gray-900 mb-2">
-            Multi-File Data Processor
-          </h2>
-          <p className="text-gray-600">
-            Upload XML, JSON (Master Data), Excel, PDF, and/or CSV files for comprehensive data processing and validation.
-          </p>
-        </div>
-
-        <div className="p-6">
-          {/* File Requirements Notice - Updated */}
-          <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-            <h3 className="text-sm font-medium text-blue-900 mb-2">Supported File Types & Processing:</h3>
-            <div className="grid grid-cols-1 md:grid-cols-5 gap-4 text-sm text-blue-800">
-              <div>
-                <h4 className="font-medium mb-1">XML + JSON Processing:</h4>
-                <ul className="text-xs space-y-1">
-                  <li>• XML: Credit card transactions</li>
-                  <li>• JSON: Customer master data</li>
-                  <li>• Both files required together</li>
-                </ul>
-              </div>
-              <div>
-                <h4 className="font-medium mb-1">Excel Processing:</h4>
-                <ul className="text-xs space-y-1">
-                  <li>• Excel: UPI transaction data</li>
-                  <li>• Comprehensive data validation</li>
-                  <li>• Standalone processing</li>
-                </ul>
-              </div>
-              <div>
-                <h4 className="font-medium mb-1">PDF Processing:</h4>
-                <ul className="text-xs space-y-1">
-                  <li>• PDF: Trade data tables</li>
-                  <li>• Multiple extraction methods</li>
-                  <li>• OCR support for images</li>
-                  <li>• Standalone processing</li>
-                </ul>
-              </div>
-              <div>
-                <h4 className="font-medium mb-1">CSV Processing:</h4>
-                <ul className="text-xs space-y-1">
-                  <li>• CSV: Any tabular data</li>
-                  <li>• Auto-detects delimiters</li>
-                  <li>• Data type detection</li>
-                  <li>• Comprehensive cleaning</li>
-                </ul>
-              </div>
-              <div>
-                <h4 className="font-medium mb-1">Combined Processing:</h4>
-                <ul className="text-xs space-y-1">
-                  <li>• Multiple file types together</li>
-                  <li>• Independent processing</li>
-                  <li>• Separate output files</li>
-                </ul>
+      {/* Statistics Dashboard */}
+      {stats && (
+        <div className="mb-6">
+          {/* Main KPI Cards */}
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-6">
+            <div className="bg-white rounded-lg shadow-sm border p-6">
+              <div className="flex items-center">
+                <div className="p-2 bg-red-100 rounded-lg">
+                  <AlertCircle className="h-6 w-6 text-red-600" />
+                </div>
+                <div className="ml-4">
+                  <p className="text-sm font-medium text-gray-600">Total Errors</p>
+                  <p className="text-2xl font-semibold text-gray-900">
+                    {numberUtils.formatNumber(stats.totalErrors)}
+                  </p>
+                </div>
               </div>
             </div>
-          </div>
 
-          {/* File Upload Area - Updated */}
-          <div
-            {...getRootProps()}
-            className={`
-              border-2 border-dashed rounded-lg p-8 text-center cursor-pointer
-              transition-colors duration-200 ease-in-out mb-6
-              ${isDragActive 
-                ? 'border-blue-500 bg-blue-50' 
-                : 'border-gray-300 hover:border-gray-400'
-              }
-              ${uploading ? 'opacity-50 cursor-not-allowed' : ''}
-            `}
-          >
-            <input {...getInputProps()} />
-            
-            <div className="flex flex-col items-center">
-              {uploading ? (
-                <Loader className="h-12 w-12 mb-4 text-blue-500 animate-spin" />
-              ) : (
-                <Upload className={`
-                  h-12 w-12 mb-4 
-                  ${isDragActive ? 'text-blue-500' : 'text-gray-400'}
-                `} />
-              )}
-              
-              <div className="text-center">
-                <p className="text-lg font-medium text-gray-900 mb-2">
-                  {uploading ? 'Processing files...' :
-                   isDragActive ? 'Drop your files here' : 'Drag & drop files here'
-                  }
-                </p>
-                <p className="text-sm text-gray-600 mb-4">
-                  or click to browse files
-                </p>
-                <div className="flex flex-wrap justify-center gap-2 text-xs text-gray-500">
-                  <span className="px-2 py-1 bg-orange-100 text-orange-700 rounded">XML</span>
-                  <span className="px-2 py-1 bg-blue-100 text-blue-700 rounded">JSON</span>
-                  <span className="px-2 py-1 bg-green-100 text-green-700 rounded">Excel</span>
-                  <span className="px-2 py-1 bg-red-100 text-red-700 rounded">PDF</span>
-                  <span className="px-2 py-1 bg-purple-100 text-purple-700 rounded">CSV</span>
+            <div className="bg-white rounded-lg shadow-sm border p-6">
+              <div className="flex items-center">
+                <div className="p-2 bg-blue-100 rounded-lg">
+                  <BarChart3 className="h-6 w-6 text-blue-600" />
+                </div>
+                <div className="ml-4">
+                  <p className="text-sm font-medium text-gray-600">Error Types</p>
+                  <p className="text-2xl font-semibold text-gray-900">
+                    {Object.keys(stats.errorsByType).length}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-white rounded-lg shadow-sm border p-6">
+              <div className="flex items-center">
+                <div className="p-2 bg-green-100 rounded-lg">
+                  <User className="h-6 w-6 text-green-600" />
+                </div>
+                <div className="ml-4">
+                  <p className="text-sm font-medium text-gray-600">Customers Affected</p>
+                  <p className="text-2xl font-semibold text-gray-900">
+                    {Object.keys(stats.errorsByCustomer || {}).length}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-white rounded-lg shadow-sm border p-6">
+              <div className="flex items-center">
+                <div className="p-2 bg-purple-100 rounded-lg">
+                  <Database className="h-6 w-6 text-purple-600" />
+                </div>
+                <div className="ml-4">
+                  <p className="text-sm font-medium text-gray-600">Databases</p>
+                  <p className="text-2xl font-semibold text-gray-900">
+                    {Object.keys(stats.errorsByDatabase).length}
+                  </p>
                 </div>
               </div>
             </div>
           </div>
 
-          {/* Selected Files Display */}
-          {selectedFiles.length > 0 && (
-            <div className="mb-6">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-medium text-gray-900">
-                  Selected Files ({selectedFiles.length})
-                </h3>
-                <button
-                  onClick={clearAll}
-                  disabled={uploading}
-                  className="text-sm text-red-600 hover:text-red-700 flex items-center gap-1"
-                >
-                  <Trash2 className="h-4 w-4" />
-                  Clear All
-                </button>
+          {/* Database Status Cards */}
+          {dbStatus && (
+            <div className="bg-white rounded-lg shadow-sm border p-6 mb-6">
+              <h3 className="text-lg font-medium text-gray-900 mb-4 flex items-center">
+                <Database className="h-5 w-5 mr-2" />
+                Database Connection Status
+              </h3>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {Object.entries(dbStatus.databases).map(([dbName, dbInfo]) => (
+                  <div key={dbName} className="border rounded-lg p-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <h4 className="font-medium text-gray-900">{dbName}</h4>
+                      <div className={`h-3 w-3 rounded-full ${
+                        dbInfo.status === 'Connected' ? 'bg-green-500' : 'bg-red-500'
+                      }`}></div>
+                    </div>
+                    <p className="text-sm text-gray-600">{dbInfo.status}</p>
+                    <p className="text-sm text-gray-500">
+                      {dbInfo.error_count} errors
+                    </p>
+                  </div>
+                ))}
               </div>
+            </div>
+          )}
 
+          {/* Top Customers with Errors */}
+          {stats.topCustomersWithErrors && stats.topCustomersWithErrors.length > 0 && (
+            <div className="bg-white rounded-lg shadow-sm border mb-6 p-6">
+              <h3 className="text-lg font-medium text-gray-900 mb-4 flex items-center">
+                <TrendingUp className="h-5 w-5 mr-2" />
+                Top Customers with Most Errors
+              </h3>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
-                {selectedFiles.map((fileItem) => {
-                  const { icon: Icon, color, bg, border } = getFileIcon(fileItem.fileType);
-                  return (
-                    <div
-                      key={fileItem.id}
-                      className={`flex items-center p-4 rounded-lg border ${bg} ${border}`}
-                    >
-                      <div className="flex-shrink-0 mr-3">
-                        <Icon className={`h-6 w-6 ${color}`} />
-                      </div>
-
-                      <div className="flex-1 min-w-0">
+                {stats.topCustomersWithErrors.slice(0, 5).map((customer, index) => (
+                  <div 
+                    key={customer.customerId}
+                    className="bg-gray-50 rounded-lg p-4 cursor-pointer hover:bg-gray-100 transition-colors"
+                    onClick={() => fetchCustomerErrors(customer.customerId)}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div>
                         <p className="text-sm font-medium text-gray-900 truncate">
-                          {fileItem.name}
+                          {customer.customerId}
                         </p>
                         <p className="text-xs text-gray-500">
-                          {formatFileSize(fileItem.size)} • {fileItem.fileType.toUpperCase()}
-                        </p>
-                        <p className="text-xs text-gray-400">
-                          Added at {fileItem.addedAt}
+                          {customer.errorCount} errors
                         </p>
                       </div>
-
-                      {!uploading && (
-                        <button
-                          onClick={() => removeFile(fileItem.id)}
-                          className="text-red-500 hover:text-red-700 p-1 ml-2"
-                        >
-                          <X className="h-4 w-4" />
-                        </button>
-                      )}
+                      <div className="text-lg font-bold text-red-500">
+                        #{index + 1}
+                      </div>
                     </div>
-                  );
-                })}
+                  </div>
+                ))}
               </div>
+            </div>
+          )}
 
-              {/* Process Button */}
-              <div className="mt-6 flex justify-center">
+          {/* Error Distribution Charts */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+            {/* Error by Type */}
+            <div className="bg-white rounded-lg shadow-sm border p-6">
+              <h3 className="text-lg font-medium text-gray-900 mb-4">
+                Errors by Type
+              </h3>
+              <div className="space-y-3">
+                {Object.entries(stats.errorsByType).map(([type, count]) => (
+                  <div key={type} className="flex items-center justify-between">
+                    <div className="flex items-center">
+                      <div 
+                        className="w-4 h-4 rounded mr-3"
+                        style={{ backgroundColor: getErrorTypeColor(type) }}
+                      ></div>
+                      <span className="text-sm text-gray-700">
+                        {type.replace('_', ' ')}
+                      </span>
+                    </div>
+                    <span className="text-sm font-medium text-gray-900">
+                      {count}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Error by Source */}
+            <div className="bg-white rounded-lg shadow-sm border p-6">
+              <h3 className="text-lg font-medium text-gray-900 mb-4">
+                Errors by Source Format
+              </h3>
+              <div className="space-y-3">
+                {Object.entries(stats.errorsBySource).map(([source, count]) => (
+                  <div key={source} className="flex items-center justify-between">
+                    <div className="flex items-center">
+                      <FileText className="h-4 w-4 text-gray-400 mr-3" />
+                      <span className="text-sm text-gray-700">{source}</span>
+                    </div>
+                    <span className="text-sm font-medium text-gray-900">
+                      {count}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="bg-white rounded-lg shadow-sm border">
+        {/* Header */}
+        <div className="p-6 border-b">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 className="text-2xl font-semibold text-gray-900">
+                {showCustomerView ? `Errors for Customer: ${selectedCustomer}` : 'Error Logs'}
+              </h2>
+              <p className="text-gray-600 mt-1">
+                {showCustomerView ? 
+                  `Showing ${customerErrors.length} errors for this customer` :
+                  'Monitor and manage data processing errors across all databases'
+                }
+              </p>
+            </div>
+            
+            <div className="flex items-center space-x-3 mt-4 sm:mt-0">
+              {showCustomerView && (
                 <button
-                  onClick={uploadFiles}
-                  disabled={uploading}
-                  className={`px-8 py-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-colors ${
-                    uploading 
-                      ? 'bg-gray-400 cursor-not-allowed' 
-                      : 'bg-blue-600 hover:bg-blue-700'
-                  } text-white font-medium`}
+                  onClick={() => {
+                    setShowCustomerView(false);
+                    setCustomerErrors([]);
+                    setSelectedCustomer('');
+                    fetchErrors(1);
+                  }}
+                  className="inline-flex items-center px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50"
                 >
-                  {uploading ? (
-                    <>
-                      <Loader className="w-4 h-4 mr-2 animate-spin inline" />
-                      Processing {selectedFiles.length} file{selectedFiles.length !== 1 ? 's' : ''}...
-                    </>
-                  ) : (
-                    `Process ${selectedFiles.length} File${selectedFiles.length !== 1 ? 's' : ''}`
-                  )}
+                  ← Back to All Errors
                 </button>
+              )}
+              
+              <button
+                onClick={() => setShowFilters(!showFilters)}
+                className="inline-flex items-center px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50"
+              >
+                <Filter className="h-4 w-4 mr-2" />
+                Filters
+              </button>
+              
+              <div className="relative">
+                <button
+                  onClick={() => document.getElementById('downloadMenu').classList.toggle('hidden')}
+                  disabled={downloading}
+                  className="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-red-600 hover:bg-red-700 disabled:opacity-50"
+                >
+                  <Download className="h-4 w-4 mr-2" />
+                  {downloading ? 'Downloading...' : 'Download'}
+                </button>
+                
+                <div id="downloadMenu" className="hidden absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg z-10">
+                  <div className="py-1">
+                    <button
+                      onClick={() => handleDownload('csv')}
+                      className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+                    >
+                      Download as CSV
+                    </button>
+                    <button
+                      onClick={() => handleDownload('excel')}
+                      className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+                    >
+                      Download as Excel
+                    </button>
+                    <button
+                      onClick={() => handleDownload('json')}
+                      className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+                    >
+                      Download as JSON
+                    </button>
+                  </div>
+                </div>
+              </div>
+              
+              <button
+                onClick={() => {
+                  if (showCustomerView) {
+                    fetchCustomerErrors(selectedCustomer);
+                  } else {
+                    fetchErrors(pagination.currentPage);
+                    fetchStats();
+                    fetchDbStatus();
+                  }
+                }}
+                className="inline-flex items-center px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50"
+              >
+                <RefreshCw className="h-4 w-4 mr-2" />
+                Refresh
+              </button>
+            </div>
+          </div>
+
+          {/* Filters Panel */}
+          {showFilters && (
+            <div className="mt-6 p-4 bg-gray-50 rounded-lg">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Search
+                  </label>
+                  <div className="relative">
+                    <Search className="h-4 w-4 absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
+                    <input
+                      type="text"
+                      placeholder="Search errors..."
+                      value={filters.search}
+                      onChange={(e) => handleFilterChange('search', e.target.value)}
+                      className="pl-10 block w-full rounded-md border-gray-300 shadow-sm focus:border-red-500 focus:ring-red-500 sm:text-sm"
+                    />
+                  </div>
+                </div>
+
+                {/* Customer ID Search */}
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Customer ID Search
+                  </label>
+                  <div className="flex space-x-2">
+                    <input
+                      type="text"
+                      placeholder="Enter customer ID..."
+                      value={filters.customerId}
+                      onChange={(e) => handleFilterChange('customerId', e.target.value)}
+                      onKeyPress={(e) => e.key === 'Enter' && handleCustomerSearch()}
+                      className="flex-1 block rounded-md border-gray-300 shadow-sm focus:border-red-500 focus:ring-red-500 sm:text-sm"
+                    />
+                    <button
+                      onClick={handleCustomerSearch}
+                      className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      <User className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Error Type
+                  </label>
+                  <select
+                    value={filters.errorType}
+                    onChange={(e) => handleFilterChange('errorType', e.target.value)}
+                    className="block w-full rounded-md border-gray-300 shadow-sm focus:border-red-500 focus:ring-red-500 sm:text-sm"
+                  >
+                    <option value="">All Types</option>
+                    <option value="CREDIT_VALIDATION">Credit Validation</option>
+                    <option value="CSV_PROCESSING">CSV Processing</option>
+                    <option value="EXCEL_VALIDATION">Excel Validation</option>
+                    <option value="MISSING_FIELD">Missing Field</option>
+                    <option value="INVALID_FORMAT">Invalid Format</option>
+                    <option value="VALIDATION_ERROR">Validation Error</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Source Format
+                  </label>
+                  <select
+                    value={filters.sourceFormat}
+                    onChange={(e) => handleFilterChange('sourceFormat', e.target.value)}
+                    className="block w-full rounded-md border-gray-300 shadow-sm focus:border-red-500 focus:ring-red-500 sm:text-sm"
+                  >
+                    <option value="">All Formats</option>
+                    <option value="CSV">CSV</option>
+                    <option value="Excel">Excel</option>
+                    <option value="XML">XML</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Database
+                  </label>
+                  <select
+                    value={filters.database}
+                    onChange={(e) => handleFilterChange('database', e.target.value)}
+                    className="block w-full rounded-md border-gray-300 shadow-sm focus:border-red-500 focus:ring-red-500 sm:text-sm"
+                  >
+                    <option value="">All Databases</option>
+                    <option value="CREDIT_DATA">Credit Data</option>
+                    <option value="CSV">CSV</option>
+                    <option value="UPI_EXCEL">UPI Excel</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Start Date
+                  </label>
+                  <input
+                    type="date"
+                    value={filters.startDate}
+                    onChange={(e) => handleFilterChange('startDate', e.target.value)}
+                    className="block w-full rounded-md border-gray-300 shadow-sm focus:border-red-500 focus:ring-red-500 sm:text-sm"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    End Date
+                  </label>
+                  <input
+                    type="date"
+                    value={filters.endDate}
+                    onChange={(e) => handleFilterChange('endDate', e.target.value)}
+                    className="block w-full rounded-md border-gray-300 shadow-sm focus:border-red-500 focus:ring-red-500 sm:text-sm"
+                  />
+                </div>
+
+                <div className="flex items-end">
+                  <button
+                    onClick={clearFilters}
+                    className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800"
+                  >
+                    Clear All Filters
+                  </button>
+                </div>
               </div>
             </div>
           )}
         </div>
 
-        {/* Processing Results */}
-        {uploadResult && (
-          <div className="p-6 border-t">
-            <h3 className="text-lg font-medium text-gray-900 mb-4">
-              Processing Results
-            </h3>
-            
-            <div className={`
-              p-4 rounded-lg border mb-6
-              ${uploadResult.success 
-                ? 'border-green-200 bg-green-50' 
-                : 'border-red-200 bg-red-50'
-              }
-            `}>
-              <div className="flex items-start">
-                <div className="flex-shrink-0 mr-3">
-                  {uploadResult.success ? (
-                    <CheckCircle className="h-5 w-5 text-green-500" />
-                  ) : (
-                    <AlertCircle className="h-5 w-5 text-red-500" />
+        {/* Table */}
+        <div className="overflow-x-auto">
+          <table className="min-w-full divide-y divide-gray-200">
+            <thead className="bg-gray-50">
+              <tr>
+                <th 
+                  onClick={() => handleSort('errorType')}
+                  className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                >
+                  Error Type
+                  {filters.sortBy === 'errorType' && (
+                    <span className="ml-1">{filters.sortOrder === 'asc' ? '↑' : '↓'}</span>
                   )}
-                </div>
-
-                <div className="flex-1 min-w-0">
-                  {uploadResult.success ? (
-                    <div className="text-sm text-green-700">
-                      <p className="font-medium mb-3">✓ Multi-file processing completed successfully!</p>
-                      
-                      <div className="text-xs text-green-600 mb-4">
-                        <p>Processing Time: <span className="font-medium">{uploadResult.processing_time}</span></p>
-                        <p>Files Processed: <span className="font-medium">{Object.keys(uploadResult.files_processed || {}).join(', ')}</span></p>
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Message
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Customer ID
+                </th>
+                <th 
+                  onClick={() => handleSort('sourceFormat')}
+                  className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                >
+                  Source
+                  {filters.sortBy === 'sourceFormat' && (
+                    <span className="ml-1">{filters.sortOrder === 'asc' ? '↑' : '↓'}</span>
+                  )}
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Database
+                </th>
+                <th 
+                  onClick={() => handleSort('createdAt')}
+                  className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                >
+                  Date
+                  {filters.sortBy === 'createdAt' && (
+                    <span className="ml-1">{filters.sortOrder === 'asc' ? '↑' : '↓'}</span>
+                  )}
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Actions
+                </th>
+              </tr>
+            </thead>
+            <tbody className="bg-white divide-y divide-gray-200">
+              {loading ? (
+                <tr>
+                  <td colSpan="7" className="px-6 py-4 text-center">
+                    <div className="flex items-center justify-center">
+                      <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-red-500"></div>
+                      <span className="ml-2 text-gray-500">Loading...</span>
+                    </div>
+                  </td>
+                </tr>
+              ) : (showCustomerView ? customerErrors : data).length === 0 ? (
+                <tr>
+                  <td colSpan="7" className="px-6 py-4 text-center text-gray-500">
+                    {showCustomerView ? 
+                      `No errors found for customer ${selectedCustomer}` :
+                      'No error logs found'
+                    }
+                  </td>
+                </tr>
+              ) : (
+                (showCustomerView ? customerErrors : data).map((error) => (
+                  <tr key={error._id} className="hover:bg-gray-50">
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <span 
+                        className="inline-flex px-2 py-1 text-xs font-semibold rounded-full text-white"
+                        style={{ backgroundColor: getErrorTypeColor(error.errorType) }}
+                      >
+                        {error.errorType ? error.errorType.replace('_', ' ') : 'Unknown'}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 text-sm text-gray-900 max-w-xs">
+                      <div className="truncate" title={error.errorMessage}>
+                        {error.errorMessage || 'No message'}
                       </div>
-                    </div>
-                  ) : (
-                    <div className="text-sm text-red-700">
-                      <p className="font-medium">✗ Processing failed</p>
-                      <p className="mt-1 text-xs bg-red-100 p-2 rounded">{uploadResult.error}</p>
-                    </div>
-                  )}
-                </div>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm">
+                      <button
+                        onClick={() => fetchCustomerErrors(error.customerId)}
+                        className="text-blue-600 hover:text-blue-900 font-medium"
+                        disabled={!error.customerId || error.customerId === 'N/A'}
+                      >
+                        {error.customerId || 'N/A'}
+                      </button>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <span className="inline-flex px-2 py-1 text-xs font-semibold rounded-full bg-gray-100 text-gray-800">
+                        {error.sourceFormat}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <span className="inline-flex px-2 py-1 text-xs font-semibold rounded-full bg-blue-100 text-blue-800">
+                        {error.database_source}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                      {dateUtils.formatDateTime(error.createdAt)}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      <div className="flex space-x-2">
+                        <button
+                          onClick={() => setSelectedError(error)}
+                          className="text-blue-600 hover:text-blue-900"
+                          title="View Details"
+                        >
+                          <Eye className="h-4 w-4" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Pagination */}
+        {!showCustomerView && pagination.totalRecords > 0 && (
+          <div className="px-6 py-4 border-t bg-gray-50">
+            <div className="flex items-center justify-between">
+              <div className="text-sm text-gray-700">
+                Showing {((pagination.currentPage - 1) * pagination.recordsPerPage) + 1} to{' '}
+                {Math.min(pagination.currentPage * pagination.recordsPerPage, pagination.totalRecords)} of{' '}
+                {numberUtils.formatNumber(pagination.totalRecords)} results
+              </div>
+              
+              <div className="flex items-center space-x-2">
+                <button
+                  onClick={() => handlePageChange(pagination.currentPage - 1)}
+                  disabled={!pagination.hasPrevPage}
+                  className="px-3 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                </button>
+                
+                <span className="text-sm text-gray-700">
+                  Page {pagination.currentPage} of {pagination.totalPages}
+                </span>
+                
+                <button
+                  onClick={() => handlePageChange(pagination.currentPage + 1)}
+                  disabled={!pagination.hasNextPage}
+                  className="px-3 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <ChevronRight className="h-4 w-4" />
+                </button>
               </div>
             </div>
-
-            {/* XML Results */}
-            {uploadResult.success && uploadResult.results?.xml_results && (
-              <div className="mb-6">
-                <h4 className="text-md font-medium text-gray-900 mb-3 flex items-center">
-                  <FileText className="h-4 w-4 text-orange-500 mr-2" />
-                  XML Processing Results
-                </h4>
-                
-                {(() => {
-                  const xmlResults = uploadResult.results.xml_results;
-                  const metrics = calculateXMLMetrics(xmlResults);
-                  
-                  return (
-                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
-                      {/* XML Processing Summary */}
-                      <div className="bg-orange-50 p-3 rounded border border-orange-200">
-                        <h5 className="font-medium text-orange-800 mb-2 flex items-center">
-                          <FileSpreadsheet className="h-4 w-4 mr-1" />
-                          XML Summary
-                        </h5>
-                        <div className="space-y-1 text-xs">
-                          <div className="flex justify-between">
-                            <span>XML Customers:</span>
-                            <span className="font-medium">{xmlResults.xml_customers?.toLocaleString()}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span>Master Customers:</span>
-                            <span className="font-medium">{xmlResults.master_customers?.toLocaleString()}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span>Cleaned Records:</span>
-                            <span className="font-medium text-green-600">{xmlResults.cleaned_data?.length || 0}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span>Error Records:</span>
-                            <span className="font-medium text-red-600">{xmlResults.error_log?.length || 0}</span>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* XML Success Metrics */}
-                      {metrics && (
-                        <>
-                          <div className="bg-blue-50 p-3 rounded border border-blue-200">
-                            <h5 className="font-medium text-blue-800 mb-2 flex items-center">
-                              <TrendingUp className="h-4 w-4 mr-1" />
-                              Success Metrics
-                            </h5>
-                            <div className="space-y-1 text-xs">
-                              <div className="flex justify-between">
-                                <span>XML Success Rate:</span>
-                                <span className="font-medium text-green-600">{metrics.xmlSuccessRate}%</span>
-                              </div>
-                              <div className="text-xs text-blue-700 italic">
-                                (Cleaned / XML Customers)
-                              </div>
-                              <div className="flex justify-between mt-2">
-                                <span>Coverage Rate:</span>
-                                <span className="font-medium text-purple-600">{metrics.coverageRate}%</span>
-                              </div>
-                            </div>
-                          </div>
-
-                          <div className="bg-yellow-50 p-3 rounded border border-yellow-200">
-                            <h5 className="font-medium text-yellow-800 mb-2 flex items-center">
-                              <TrendingDown className="h-4 w-4 mr-1" />
-                              Missing Analysis
-                            </h5>
-                            <div className="space-y-1 text-xs">
-                              <div className="flex justify-between">
-                                <span>Missing Rate:</span>
-                                <span className="font-medium text-orange-600">{metrics.missingRate}%</span>
-                              </div>
-                              <div className="flex justify-between">
-                                <span>Missing Customers:</span>
-                                <span className="font-medium text-red-600">{metrics.missingFromXmlCount.toLocaleString()}</span>
-                              </div>
-                            </div>
-                          </div>
-                        </>
-                      )}
-                    </div>
-                  );
-                })()}
-              </div>
-            )}
-
-            {/* Excel Results */}
-            {uploadResult.success && uploadResult.results?.excel_results && (
-              <div className="mb-6">
-                <h4 className="text-md font-medium text-gray-900 mb-3 flex items-center">
-                  <FileSpreadsheet className="h-4 w-4 text-green-500 mr-2" />
-                  Excel Processing Results
-                </h4>
-                
-                {(() => {
-                  const excelResults = uploadResult.results.excel_results;
-                  const metrics = calculateExcelMetrics(excelResults);
-                  
-                  return (
-                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
-                      {/* Excel Processing Summary */}
-                      <div className="bg-green-50 p-3 rounded border border-green-200">
-                        <h5 className="font-medium text-green-800 mb-2 flex items-center">
-                          <BarChart3 className="h-4 w-4 mr-1" />
-                          Excel Summary
-                        </h5>
-                        <div className="space-y-1 text-xs">
-                          <div className="flex justify-between">
-                            <span>Total Rows:</span>
-                            <span className="font-medium">{metrics.totalRows.toLocaleString()}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span>Clean Rows:</span>
-                            <span className="font-medium text-green-600">{metrics.cleanRows.toLocaleString()}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span>Error Rows:</span>
-                            <span className="font-medium text-red-600">{metrics.errorRows.toLocaleString()}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span>Success Rate:</span>
-                            <span className="font-medium text-blue-600">{metrics.successRate}%</span>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Column Information */}
-                      <div className="bg-blue-50 p-3 rounded border border-blue-200">
-                        <h5 className="font-medium text-blue-800 mb-2">Columns Processed</h5>
-                        <div className="text-xs">
-                          <p className="font-medium mb-1">Total Columns: {excelResults.columns_processed?.length || 0}</p>
-                          <div className="max-h-20 overflow-y-auto">
-                            {excelResults.columns_processed?.slice(0, 5).map((col, idx) => (
-                              <div key={idx} className="text-blue-700">• {col}</div>
-                            ))}
-                            {excelResults.columns_processed?.length > 5 && (
-                              <div className="text-blue-600 italic">... and {excelResults.columns_processed.length - 5} more</div>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Error Breakdown */}
-                      <div className="bg-red-50 p-3 rounded border border-red-200">
-                        <h5 className="font-medium text-red-800 mb-2">Error Breakdown</h5>
-                        <div className="text-xs max-h-20 overflow-y-auto">
-                          {Object.entries(metrics.errorInfo || {}).filter(([_, count]) => count > 0).slice(0, 4).map(([column, count], idx) => (
-                            <div key={idx} className="flex justify-between">
-                              <span className="text-red-700 truncate">{column}:</span>
-                              <span className="font-medium text-red-600">{count}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })()}
-              </div>
-            )}
-
-            {/* PDF Results */}
-            {uploadResult.success && uploadResult.results?.pdf_results && (
-              <div className="mb-6">
-                <h4 className="text-md font-medium text-gray-900 mb-3 flex items-center">
-                  <FileImage className="h-4 w-4 text-red-500 mr-2" />
-                  PDF Processing Results
-                </h4>
-                
-                {(() => {
-                  const pdfResults = uploadResult.results.pdf_results;
-                  const metrics = calculatePDFMetrics(pdfResults);
-                  
-                  return (
-                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
-                      {/* PDF Processing Summary */}
-                      <div className="bg-red-50 p-3 rounded border border-red-200">
-                        <h5 className="font-medium text-red-800 mb-2 flex items-center">
-                          <FileImage className="h-4 w-4 mr-1" />
-                          PDF Summary
-                        </h5>
-                        <div className="space-y-1 text-xs">
-                          <div className="flex justify-between">
-                            <span>Tables Found:</span>
-                            <span className="font-medium">{metrics.tablesFound}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span>Total PDF Rows:</span>
-                            <span className="font-medium">{metrics.totalPdfRows.toLocaleString()}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span>Processed Rows:</span>
-                            <span className="font-medium text-green-600">{metrics.processedRows.toLocaleString()}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span>Error Rows:</span>
-                            <span className="font-medium text-red-600">{metrics.errorRows.toLocaleString()}</span>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* PDF Success Metrics */}
-                      <div className="bg-purple-50 p-3 rounded border border-purple-200">
-                        <h5 className="font-medium text-purple-800 mb-2 flex items-center">
-                          <TrendingUp className="h-4 w-4 mr-1" />
-                          Processing Metrics
-                        </h5>
-                        <div className="space-y-1 text-xs">
-                          <div className="flex justify-between">
-                            <span>Success Rate:</span>
-                            <span className="font-medium text-green-600">{metrics.successRate}%</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span>Extraction Method:</span>
-                            <span className="font-medium text-blue-600">{metrics.extractionMethod}</span>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Extracted Columns */}
-                      <div className="bg-indigo-50 p-3 rounded border border-indigo-200">
-                        <h5 className="font-medium text-indigo-800 mb-2">Extracted Columns</h5>
-                        <div className="text-xs max-h-20 overflow-y-auto">
-                          {metrics.columnsExtracted?.slice(0, 5).map((col, idx) => (
-                            <div key={idx} className="text-indigo-700">• {col}</div>
-                          ))}
-                          {metrics.columnsExtracted?.length > 5 && (
-                            <div className="text-indigo-600 italic">... and {metrics.columnsExtracted.length - 5} more</div>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })()}
-              </div>
-            )}
-
-            {/* CSV Results - NEW */}
-            {uploadResult.success && uploadResult.results?.csv_results && (
-              <div className="mb-6">
-                <h4 className="text-md font-medium text-gray-900 mb-3 flex items-center">
-                  <BarChart3 className="h-4 w-4 text-purple-500 mr-2" />
-                  CSV Processing Results
-                </h4>
-                
-                {(() => {
-                  const csvResults = uploadResult.results.csv_results;
-                  const metrics = calculateCSVMetrics(csvResults);
-                  
-                  return (
-                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
-                      {/* CSV Processing Summary */}
-                      <div className="bg-purple-50 p-3 rounded border border-purple-200">
-                        <h5 className="font-medium text-purple-800 mb-2 flex items-center">
-                          <BarChart3 className="h-4 w-4 mr-1" />
-                          CSV Summary
-                        </h5>
-                        <div className="space-y-1 text-xs">
-                          <div className="flex justify-between">
-                            <span>Total Rows:</span>
-                            <span className="font-medium">{metrics.totalRows.toLocaleString()}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span>Clean Rows:</span>
-                            <span className="font-medium text-green-600">{metrics.cleanRows.toLocaleString()}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span>Error Rows:</span>
-                            <span className="font-medium text-red-600">{metrics.errorRows.toLocaleString()}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span>Success Rate:</span>
-                            <span className="font-medium text-blue-600">{metrics.successRate}%</span>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Data Cleaning Stats */}
-                      <div className="bg-indigo-50 p-3 rounded border border-indigo-200">
-                        <h5 className="font-medium text-indigo-800 mb-2">Data Cleaning</h5>
-                        <div className="space-y-1 text-xs">
-                          <div className="flex justify-between">
-                            <span>Duplicates Removed:</span>
-                            <span className="font-medium text-orange-600">{metrics.duplicatesRemoved}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span>Empty Rows Removed:</span>
-                            <span className="font-medium text-red-600">{metrics.emptyRowsRemoved}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span>Delimiter:</span>
-                            <span className="font-medium">{metrics.fileInfo.delimiter || 'Auto-detected'}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span>Encoding:</span>
-                            <span className="font-medium">{metrics.fileInfo.encoding || 'Auto-detected'}</span>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Column Types */}
-                      <div className="bg-teal-50 p-3 rounded border border-teal-200">
-                        <h5 className="font-medium text-teal-800 mb-2">Column Analysis</h5>
-                        <div className="space-y-1 text-xs">
-                          <div className="flex justify-between">
-                            <span>Numeric Columns:</span>
-                            <span className="font-medium text-blue-600">{metrics.columnTypes.numeric?.length || 0}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span>Date Columns:</span>
-                            <span className="font-medium text-green-600">{metrics.columnTypes.date?.length || 0}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span>Text Columns:</span>
-                            <span className="font-medium text-purple-600">{metrics.columnTypes.text?.length || 0}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span>Total Columns:</span>
-                            <span className="font-medium">{csvResults.columns_processed?.length || 0}</span>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })()}
-              </div>
-            )}
-
-            {/* Output Files - Updated */}
-            {uploadResult.success && uploadResult.output_files && (
-              <div className="bg-gray-100 p-4 rounded">
-                <h4 className="font-medium text-gray-800 mb-3">Output Files Generated</h4>
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-4 text-xs">
-                  
-                  {/* XML Output Files */}
-                  {uploadResult.output_files.xml_files && (
-                    <div>
-                      <h5 className="font-medium text-gray-700 mb-2">XML Processing Files:</h5>
-                      <div className="space-y-1">
-                        <div className="flex items-center">
-                          <div className="w-2 h-2 bg-green-500 rounded-full mr-2"></div>
-                          <span className="text-green-700 font-mono">cleaned_customers_final.json</span>
-                        </div>
-                        <div className="flex items-center">
-                          <div className="w-2 h-2 bg-red-500 rounded-full mr-2"></div>
-                          <span className="text-red-700 font-mono">error_log_final.json</span>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Excel Output Files */}
-                  {uploadResult.output_files.excel_files && (
-                    <div>
-                      <h5 className="font-medium text-gray-700 mb-2">Excel Processing Files:</h5>
-                      <div className="space-y-1">
-                        <div className="flex items-center">
-                          <div className="w-2 h-2 bg-green-500 rounded-full mr-2"></div>
-                          <span className="text-green-700 font-mono">clean_excel_data.json</span>
-                        </div>
-                        <div className="flex items-center">
-                          <div className="w-2 h-2 bg-red-500 rounded-full mr-2"></div>
-                          <span className="text-red-700 font-mono">excel_errors.json</span>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* PDF Output Files */}
-                  {uploadResult.output_files.pdf_files && (
-                    <div>
-                      <h5 className="font-medium text-gray-700 mb-2">PDF Processing Files:</h5>
-                      <div className="space-y-1">
-                        <div className="flex items-center">
-                          <div className="w-2 h-2 bg-green-500 rounded-full mr-2"></div>
-                          <span className="text-green-700 font-mono">processed_pdf_data.json</span>
-                        </div>
-                        <div className="flex items-center">
-                          <div className="w-2 h-2 bg-red-500 rounded-full mr-2"></div>
-                          <span className="text-red-700 font-mono">pdf_errors.json</span>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* CSV Output Files - NEW */}
-                  {uploadResult.output_files.csv_files && (
-                    <div>
-                      <h5 className="font-medium text-gray-700 mb-2">CSV Processing Files:</h5>
-                      <div className="space-y-1">
-                        <div className="flex items-center">
-                          <div className="w-2 h-2 bg-green-500 rounded-full mr-2"></div>
-                          <span className="text-green-700 font-mono">clean_csv_data.json</span>
-                        </div>
-                        <div className="flex items-center">
-                          <div className="w-2 h-2 bg-red-500 rounded-full mr-2"></div>
-                          <span className="text-red-700 font-mono">csv_errors.json</span>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="col-span-1 md:col-span-4 text-gray-600 italic mt-2">
-                    📁 All files saved in: <code>backend/output/</code> directory<br/>
-                    📁 Uploaded files stored in: <code>backend/data/</code> directory
-                  </div>
-                </div>
-              </div>
-            )}
           </div>
         )}
+      </div>
 
-        {/* Processing Information - Updated */}
-        <div className="p-6 border-t bg-gray-50">
-          <h4 className="text-sm font-medium text-gray-900 mb-3">
-            Multi-File Processing Information
-          </h4>
-          <div className="grid grid-cols-1 md:grid-cols-5 gap-4 text-sm text-gray-600">
-            <div>
-              <h5 className="font-medium text-gray-800 mb-2">XML Processing</h5>
-              <ul className="space-y-1">
-                <li>• Requires JSON master data for validation</li>
-                <li>• Cross-validation between XML and master data</li>
-                <li>• Median imputation for missing values</li>
-                <li>• Credit card transaction analysis</li>
-                <li>• Comprehensive error logging</li>
-              </ul>
+      {/* Error Detail Modal */}
+      {selectedError && (
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+          <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-3/4 lg:w-2/3 shadow-lg rounded-md bg-white">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-medium text-gray-900">
+                Error Details - {selectedError.database_source}
+              </h3>
+              <button
+                onClick={() => setSelectedError(null)}
+                className="text-gray-400 hover:text-gray-600 text-2xl"
+              >
+                ×
+              </button>
             </div>
-            <div>
-              <h5 className="font-medium text-gray-800 mb-2">Excel Processing</h5>
-              <ul className="space-y-1">
-                <li>• UPI transaction data validation</li>
-                <li>• Transaction ID format checking</li>
-                <li>• Timestamp and status validation</li>
-                <li>• Device and network type verification</li>
-                <li>• Column-wise error tracking</li>
-              </ul>
-            </div>
-            <div>
-              <h5 className="font-medium text-gray-800 mb-2">PDF Processing</h5>
-              <ul className="space-y-1">
-                <li>• Standalone processing (no master data required)</li>
-                <li>• Multiple extraction methods (tabula, camelot, OCR)</li>
-                <li>• Automatic table detection and extraction</li>
-                <li>• Image-based PDF support with OCR</li>
-                <li>• Smart data quality validation</li>
-              </ul>
-            </div>
-            <div>
-              <h5 className="font-medium text-gray-800 mb-2">CSV Processing</h5>
-              <ul className="space-y-1">
-                <li>• Automatic delimiter and encoding detection</li>
-                <li>• Intelligent data type detection</li>
-                <li>• Comprehensive data cleaning and validation</li>
-                <li>• Duplicate and empty row removal</li>
-                <li>• Column-wise statistics and quality scoring</li>
-              </ul>
-            </div>
-            <div>
-              <h5 className="font-medium text-gray-800 mb-2">Combined Benefits</h5>
-              <ul className="space-y-1">
-                <li>• Process multiple file types simultaneously</li>
-                <li>• Independent processing for each type</li>
-                <li>• Separate output files for each processor</li>
-                <li>• Comprehensive error reporting</li>
-                <li>• Real-time progress tracking</li>
-              </ul>
+            
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Error ID</label>
+                  <p className="text-sm text-gray-900 font-mono">{selectedError._id}</p>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Error Type</label>
+                  <span 
+                    className="inline-flex px-2 py-1 text-xs font-semibold rounded-full text-white"
+                    style={{ backgroundColor: getErrorTypeColor(selectedError.errorType) }}
+                  >
+                    {selectedError.errorType ? selectedError.errorType.replace('_', ' ') : 'Unknown'}
+                  </span>
+                </div>
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-medium text-gray-700">Error Message</label>
+                  <p className="text-sm text-gray-900 bg-red-50 p-2 rounded">
+                    {selectedError.errorMessage}
+                  </p>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Customer ID</label>
+                  <p className="text-sm text-gray-900 font-mono">
+                    {selectedError.customerId || 'N/A'}
+                  </p>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Transaction ID</label>
+                  <p className="text-sm text-gray-900 font-mono">
+                    {selectedError.transactionId || 'N/A'}
+                  </p>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Source Format</label>
+                  <p className="text-sm text-gray-900">{selectedError.sourceFormat}</p>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Database Source</label>
+                  <p className="text-sm text-gray-900">{selectedError.database_source}</p>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Source File</label>
+                  <p className="text-sm text-gray-900">{selectedError.sourceFile || 'N/A'}</p>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Line Number</label>
+                  <p className="text-sm text-gray-900">{selectedError.lineNumber || 'N/A'}</p>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Processed By</label>
+                  <p className="text-sm text-gray-900">{selectedError.processedBy}</p>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Processed At</label>
+                  <p className="text-sm text-gray-900">
+                    {dateUtils.formatDateTime(selectedError.createdAt)}
+                  </p>
+                </div>
+              </div>
+              
+              {selectedError.errorDetails && selectedError.errorDetails.length > 0 && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Error Details</label>
+                  <div className="bg-red-50 p-3 rounded-md">
+                    <ul className="text-sm text-red-800 space-y-1">
+                      {selectedError.errorDetails.map((detail, index) => (
+                        <li key={index}>• {detail}</li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              )}
+
+              {selectedError.rawData && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Raw Data</label>
+                  <div className="bg-gray-50 p-3 rounded-md max-h-64 overflow-y-auto">
+                    <pre className="text-xs text-gray-900 whitespace-pre-wrap">
+                      {JSON.stringify(selectedError.rawData, null, 2)}
+                    </pre>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
-      </div>
+      )}
     </div>
   );
 };
 
-export default UploadForm;
+export default ErrorLogs;

@@ -1,4 +1,4 @@
-// services/api.js
+// src/services/api.js
 const API_BASE_URL = 'http://localhost:8000/api';
 
 export const errorsAPI = {
@@ -49,9 +49,76 @@ export const errorsAPI = {
   }
 };
 
+// Add the missing customersAPI that other components expect
+export const customersAPI = {
+  getCustomers: async (params = {}) => {
+    // Use the existing customer errors endpoint as a workaround
+    try {
+      const stats = await errorsAPI.getErrorStats();
+      const customers = stats.topCustomersWithErrors || [];
+      
+      return {
+        data: customers.map(customer => ({
+          id: customer.customerId,
+          customerId: customer.customerId,
+          errorCount: customer.errorCount,
+          status: 'active',
+          lastSeen: new Date().toISOString()
+        })),
+        pagination: {
+          currentPage: 1,
+          totalPages: 1,
+          totalRecords: customers.length,
+          recordsPerPage: customers.length
+        }
+      };
+    } catch (error) {
+      console.error('Error fetching customers:', error);
+      return {
+        data: [],
+        pagination: {
+          currentPage: 1,
+          totalPages: 1,
+          totalRecords: 0,
+          recordsPerPage: 10
+        }
+      };
+    }
+  },
+
+  getCustomerById: async (customerId) => {
+    try {
+      const customerErrors = await errorsAPI.getCustomerErrors(customerId);
+      return {
+        id: customerId,
+        customerId: customerId,
+        errorCount: customerErrors.totalErrors,
+        errors: customerErrors.errors,
+        status: 'active',
+        lastSeen: new Date().toISOString()
+      };
+    } catch (error) {
+      console.error('Error fetching customer by ID:', error);
+      throw error;
+    }
+  },
+
+  // Alias for compatibility
+  getCustomerErrors: async (customerId) => {
+    return errorsAPI.getCustomerErrors(customerId);
+  }
+};
+
 export const downloadAPI = {
   downloadErrors: async (params) => {
     const data = JSON.stringify(params, null, 2);
+    const blob = new Blob([data], { type: 'application/json' });
+    return blob;
+  },
+
+  downloadCustomers: async (params) => {
+    const customers = await customersAPI.getCustomers(params);
+    const data = JSON.stringify(customers.data, null, 2);
     const blob = new Blob([data], { type: 'application/json' });
     return blob;
   }
